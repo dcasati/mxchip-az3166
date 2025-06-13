@@ -99,7 +99,6 @@ static stmdev_ctx_t dev_ctx =
     &hi2c1,
 };
 
-static uint32_t timeout = 5;
 /* Main Example --------------------------------------------------------------*/
 Sensor_StatusTypeDef lis2mdl_config(void)
 {
@@ -118,7 +117,6 @@ Sensor_StatusTypeDef lis2mdl_config(void)
   else
   {
 
-    timeout = 5;
     /* Restore default configuration */
     lis2mdl_reset_set(&dev_ctx, PROPERTY_ENABLE);
   do {
@@ -146,13 +144,14 @@ Sensor_StatusTypeDef lis2mdl_config(void)
 lis2mdl_data_t lis2mdl_data_read(void)
  {
    lis2mdl_data_t reading = {0};
-    uint8_t reg;
+    uint8_t reg = 0;
+    uint32_t timeout = 5000; // Reset timeout for each read, increase timeout value
 
     /* Read output only if new value is available */
     while((reg!=1) && (timeout>0))
     {
         lis2mdl_mag_data_ready_get(&dev_ctx, &reg);
-        timeout --;
+        timeout--;
     }
       /* Read magnetic field data */
       memset(data_raw_magnetic.u8bit, 0x00, 3 * sizeof(int16_t));

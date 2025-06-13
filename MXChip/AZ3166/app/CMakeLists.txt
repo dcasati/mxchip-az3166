@@ -8,12 +8,12 @@ set(SOURCES
     stm32cubef4/stm32f4xx_hal_msp.c
     legacy/mqtt.c
     azure_config.h
-    nx_client.c
     board_init.c
     console.c
     screen.c
     main.c
     wwd_networking.c
+    config_manager.c
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
