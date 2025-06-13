@@ -20,8 +20,8 @@ extern device_config_t g_device_config;
 // ----------------------------------------------------------------------------
 // WiFi connection config - fallback defaults (used if flash config fails)
 // ----------------------------------------------------------------------------
-#define WIFI_SSID_DEFAULT     "HooperBay-IoT"
-#define WIFI_PASSWORD_DEFAULT "daysofthenew!"
+#define WIFI_SSID_DEFAULT     "MYWIFI"
+#define WIFI_PASSWORD_DEFAULT "MYPASS"
 #define WIFI_MODE_DEFAULT     WPA2_PSK_AES
 
 // ----------------------------------------------------------------------------
