@@ -15,9 +15,15 @@ typedef enum
 // ----------------------------------------------------------------------------
 // WiFi connection config
 // ----------------------------------------------------------------------------
+<<<<<<< HEAD
 #define WIFI_SSID     ""
 #define WIFI_PASSWORD ""
 #define WIFI_MODE     WPA2_PSK_AES
+=======
+#define WIFI_SSID_DEFAULT     "MYWIFI"
+#define WIFI_PASSWORD_DEFAULT "MYPASS"
+#define WIFI_MODE_DEFAULT     WPA2_PSK_AES
+>>>>>>> 27acbad... example info
 
 // ----------------------------------------------------------------------------
 // Azure IoT Dynamic Provisioning Service
