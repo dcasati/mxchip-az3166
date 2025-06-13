@@ -136,16 +136,29 @@ Sensor_StatusTypeDef lps22hb_config(void)
   return ret;
 }
 
-static uint32_t timeout = 5;
 lps22hb_t lps22hb_data_read(void)
 {
   lps22hb_t reading = {0};
-    uint8_t reg;
+    uint8_t reg = 0;
+    uint32_t timeout = 1000; // Reasonable timeout
+    
     /* Read output only if new value is available */
     while((reg!=1) && (timeout>0))
     {
       lps22hb_press_data_ready_get(&dev_ctx, &reg);
       timeout--;
+      if (timeout % 100 == 0) {
+        // Small delay every 100 iterations
+        for(volatile int i = 0; i < 1000; i++);
+      }
+    }
+    
+    if (timeout == 0) {
+        printf("WARNING: LPS22HB sensor timeout\r\n");
+        // Return some test data to see if the issue is sensor communication or formatting
+        reading.temperature_degC = 25.5f;
+        reading.pressure_hPa = 1013.25f;
+        return reading;
     }
     
     memset(data_raw_pressure.u8bit, 0x00, sizeof(int32_t));

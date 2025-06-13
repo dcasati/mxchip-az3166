@@ -153,7 +153,6 @@ Sensor_StatusTypeDef hts221_config(void)
   return ret;
 }
 
-static uint32_t timeout = 5;
 hts221_data_t hts221_data_read(void)
 {
   hts221_data_t reading = {0};
@@ -162,6 +161,7 @@ hts221_data_t hts221_data_read(void)
 
     /* Read output only if new value is available */
     hts221_reg_t reg;
+    uint32_t timeout = 5000; // Reset timeout for each read, increase timeout value
     
     /* Read output only if new value is available */
     while((reg.status_reg.h_da!=1) && (reg.status_reg.t_da!=1) && (timeout>0))

@@ -154,7 +154,6 @@ Sensor_StatusTypeDef lsm6dsl_config(void)
   }
   return ret;
 }
-static uint32_t timeout = 5;
 lsm6dsl_data_t lsm6dsl_data_read(void)
 {
 lsm6dsl_data_t reading= {0};
@@ -162,6 +161,7 @@ lsm6dsl_data_t reading= {0};
      * Read output only if new value is available
      */
     lsm6dsl_reg_t reg;
+    uint32_t timeout = 5000; // Reset timeout for each read, increase timeout value
     while((reg.status_reg.xlda!=1) && (reg.status_reg.gda!=1)&& (reg.status_reg.tda!=1) && (timeout>0))
     {
        lsm6dsl_status_reg_get(&dev_ctx, &reg.status_reg);
