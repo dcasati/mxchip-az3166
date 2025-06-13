@@ -11,6 +11,8 @@
 #include "wiced_sdk.h"
 
 #include "sntp_client.h"
+#include "config_manager.h"
+#include <stdint.h>
 
 #define NETX_IP_STACK_SIZE   2048
 #define NETX_TX_PACKET_COUNT 16
@@ -47,10 +49,10 @@ static void print_address(CHAR* preable, ULONG address)
 {
     printf("\t%s: %d.%d.%d.%d\r\n",
         preable,
-        (u_int8_t)(address >> 24),
-        (u_int8_t)(address >> 16 & 0xFF),
-        (u_int8_t)(address >> 8 & 0xFF),
-        (u_int8_t)(address & 0xFF));
+        (uint8_t)(address >> 24),
+        (uint8_t)(address >> 16 & 0xFF),
+        (uint8_t)(address >> 8 & 0xFF),
+        (uint8_t)(address & 0xFF));
 }
 
 /* Join Network.  */
@@ -103,12 +105,25 @@ static UINT dhcp_connect(void)
     ULONG gateway_address;
 
     printf("\r\nInitializing DHCP\r\n");
+    printf("Waiting for DHCP lease assignment...\r\n");
+
+    // Check current IP status before waiting
+    ULONG current_ip, current_mask;
+    nx_ip_address_get(&nx_ip, &current_ip, &current_mask);
+    printf("Current IP before DHCP wait: %d.%d.%d.%d\r\n",
+        (uint8_t)(current_ip >> 24),
+        (uint8_t)(current_ip >> 16 & 0xFF), 
+        (uint8_t)(current_ip >> 8 & 0xFF),
+        (uint8_t)(current_ip & 0xFF));
 
     // Wait until address is solved.
     if ((status = nx_ip_status_check(&nx_ip, NX_IP_ADDRESS_RESOLVED, &actual_status, DHCP_WAIT_TIME_TICKS)))
     {
         // DHCP Failed...  no IP address!
-        printf("ERROR: Can't resolve DHCP address (0x%08x\r\n", status);
+        printf("ERROR: Can't resolve DHCP address (0x%08lx)\r\n", (unsigned long)status);
+        printf("       Actual status: 0x%08lx\r\n", (unsigned long)actual_status);
+        printf("       NX_IP_ADDRESS_RESOLVED = 0x%08lx\r\n", (unsigned long)NX_IP_ADDRESS_RESOLVED);
+        printf("       Check WiFi connection and router DHCP settings\r\n");
         return status;
     }
 
@@ -117,9 +132,13 @@ static UINT dhcp_connect(void)
     nx_ip_gateway_address_get(&nx_ip, &gateway_address);
 
     // Output IP address and gateway address
+    printf("\r\n=============================\r\n");
+    printf("DHCP IP Configuration\r\n");
+    printf("=============================\r\n");
     print_address("IP address", ip_address);
     print_address("Mask", network_mask);
     print_address("Gateway", gateway_address);
+    printf("=============================\r\n");
 
     printf("SUCCESS: DHCP initialized\r\n");
 
@@ -158,6 +177,18 @@ static UINT dns_connect()
             printf("ERROR: nx_dns_server_add (0x%08x)\r\n", status);
             return status;
         }
+    }
+    
+    // Add Google's public DNS server as a backup
+    ULONG google_dns = IP_ADDRESS(8, 8, 8, 8); // 8.8.8.8
+    print_address("Adding backup DNS address", google_dns);
+    if ((status = nx_dns_server_add(&nx_dns_client, google_dns)))
+    {
+        printf("ERROR: Failed to add backup DNS server (0x%08x)\r\n", status);
+    }
+    else
+    {
+        printf("SUCCESS: Added Google Public DNS as backup\r\n");
     }
 
     printf("SUCCESS: DNS client initialized\r\n");
@@ -350,10 +381,11 @@ UINT wwd_network_connect()
         memcpy(wiced_ssid.value, netx_ssid, wiced_ssid.length);
 
         // Connect to the specified SSID
-        printf("\tConnecting to SSID '%s'\r\n", netx_ssid);
+        printf("\tConnecting to SSID '%s' with mode %d\r\n", netx_ssid, netx_mode);
+        printf("\tPlease wait while WiFi attempts to connect...\r\n");
         do
         {
-            printf("\tAttempt %ld...\r\n", wifiConnectCounter++);
+            printf("\tAttempt %u...\r\n", (unsigned int)wifiConnectCounter++);
 
             // Obtain the IP internal mutex before reconnecting WiFi
             tx_mutex_get(&(nx_ip.nx_ip_protection), TX_WAIT_FOREVER);
@@ -365,6 +397,17 @@ UINT wwd_network_connect()
         } while (join_result != WWD_SUCCESS);
 
         printf("SUCCESS: WiFi connected\r\n");
+        
+        // Perform delayed flash write now that WiFi is stable
+        config_result_t result = config_manager_delayed_flash_write();
+        if (result == CONFIG_OK) {
+            printf("Config saved to persistent storage\r\n");
+        } else {
+            printf("Warning: Could not save config to persistent storage\r\n");
+        }
+        
+        // Wait a moment for WiFi to stabilize before starting DHCP
+        tx_thread_sleep(2 * TX_TIMER_TICKS_PER_SECOND);
     }
 
     // Fetch IP details

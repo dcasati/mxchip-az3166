@@ -1,60 +1,117 @@
 /* Copyright (c) Microsoft Corporation.
    Licensed under the MIT License. */
 
+// This is a stub implementation to maintain compatibility while removing Azure IoT dependencies
+// All functions return NX_NOT_IMPLEMENTED
 #include "nx_client.h"
-
 #include <stdio.h>
 
-#include "screen.h"
-#include "sensor.h"
-#include "stm32f4xx_hal.h"
-
-#include "nx_api.h"
-#include "nx_azure_iot_hub_client.h"
-#include "nx_azure_iot_json_reader.h"
-#include "nx_azure_iot_provisioning_client.h"
-
-#include "azure_iot_nx_client.h"
-
-#include "azure_config.h"
-#include "azure_device_x509_cert_config.h"
-#include "azure_pnp_info.h"
-#include "wwd_networking.h"
-
-#define IOT_MODEL_ID "dtmi:azurertos:devkit:gsgmxchip;2"
-
-// Device telemetry names
-#define TELEMETRY_HUMIDITY          "humidity"
-#define TELEMETRY_TEMPERATURE       "temperature"
-#define TELEMETRY_PRESSURE          "pressure"
-#define TELEMETRY_MAGNETOMETERX     "magnetometerX"
-#define TELEMETRY_MAGNETOMETERY     "magnetometerY"
-#define TELEMETRY_MAGNETOMETERZ     "magnetometerZ"
-#define TELEMETRY_ACCELEROMETERX    "accelerometerX"
-#define TELEMETRY_ACCELEROMETERY    "accelerometerY"
-#define TELEMETRY_ACCELEROMETERZ    "accelerometerZ"
-#define TELEMETRY_GYROSCOPEX        "gyroscopeX"
-#define TELEMETRY_GYROSCOPEY        "gyroscopeY"
-#define TELEMETRY_GYROSCOPEZ        "gyroscopeZ"
-#define TELEMETRY_INTERVAL_PROPERTY "telemetryInterval"
-
-// Properties
-#define LED_STATE_PROPERTY          "ledState"
-
-// Commands
-#define SET_LED_STATE_COMMAND       "setLedState"
-#define SET_DISPLAY_TEXT_COMMAND    "setDisplayText"
-
-typedef enum TELEMETRY_STATE_ENUM
+// Stub implementation for all Azure IoT client functions - we're not using Azure IoT anymore
+UINT azure_iot_nx_client_entry(
+    NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_ptr, UINT (*unix_time_callback)(ULONG* unix_time))
 {
-    TELEMETRY_STATE_DEFAULT,
-    TELEMETRY_STATE_MAGNETOMETER,
-    TELEMETRY_STATE_ACCELEROMETER,
-    TELEMETRY_STATE_GYROSCOPE,
-    TELEMETRY_STATE_END
-} TELEMETRY_STATE;
+    printf("Azure IoT client is disabled - using direct MQTT instead\r\n");
+    return NX_NOT_IMPLEMENTED;
+}
 
-static AZURE_IOT_NX_CONTEXT azure_iot_nx_client;
+UINT azure_iot_nx_client_create(AZURE_IOT_NX_CONTEXT* context,
+    NX_IP* ip_ptr,
+    NX_PACKET_POOL* pool_ptr,
+    NX_DNS* dns_ptr,
+    UINT (*unix_time_callback)(ULONG* unix_time),
+    CHAR* iot_hub_hostname,
+    CHAR* iot_hub_device_id,
+    CHAR* iot_hub_module_id,
+    CHAR* iot_hub_device_key,
+    ULONG iot_hub_device_key_length,
+    CHAR* iot_model_id,
+    UINT iot_model_id_length)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_delete(AZURE_IOT_NX_CONTEXT* context)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_connect(AZURE_IOT_NX_CONTEXT* context)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_disconnect(AZURE_IOT_NX_CONTEXT* context)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_publish_telemetry(AZURE_IOT_NX_CONTEXT* context, CHAR* component_name, UINT component_name_len,
+    CHAR* data, UINT data_len, UINT wait_option)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_publish_properties(
+    AZURE_IOT_NX_CONTEXT* context, CHAR* data, UINT data_len, UINT wait_option)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_register_command_callback(AZURE_IOT_NX_CONTEXT* context,
+    const CHAR* command_name,
+    UINT command_name_length,
+    VOID (*callback)(AZURE_IOT_NX_CONTEXT*, const CHAR*, UINT, UCHAR*, UINT, VOID*, UINT, UCHAR*, UINT*, UINT*),
+    VOID* callback_data)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_register_properties_complete_callback(AZURE_IOT_NX_CONTEXT* context,
+    VOID (*properties_complete_callback)(AZURE_IOT_NX_CONTEXT*,
+        UINT,
+        UINT,
+        VOID*,
+        UINT,
+        UCHAR*,
+        UINT),
+    VOID* callback_data)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_register_direct_method_callback(AZURE_IOT_NX_CONTEXT* context,
+    VOID (*direct_method_callback)(AZURE_IOT_NX_CONTEXT*,
+        const UCHAR*,
+        UINT,
+        UCHAR*,
+        UINT,
+        VOID*,
+        UINT,
+        UCHAR**,
+        UINT*,
+        UINT*),
+    VOID* callback_data)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_register_writable_properties_callback(AZURE_IOT_NX_CONTEXT* context,
+    VOID (*writable_properties_callback)(AZURE_IOT_NX_CONTEXT*,
+        const UCHAR*,
+        UINT,
+        UCHAR*,
+        UINT,
+        VOID*,
+        UINT),
+    VOID* callback_data)
+{
+    return NX_NOT_IMPLEMENTED;
+}
+
+UINT azure_iot_nx_client_add_component(AZURE_IOT_NX_CONTEXT* context, CHAR* component_name, UINT component_name_length)
+{
+    return NX_NOT_IMPLEMENTED;
+}
 
 static int32_t telemetry_interval = 10;
 
@@ -293,7 +350,7 @@ static void writable_property_received_cb(AZURE_IOT_NX_CONTEXT* nx_context,
         status = nx_azure_iot_json_reader_token_int32_get(json_reader_ptr, &telemetry_interval);
         if (status == NX_AZURE_IOT_SUCCESS)
         {
-            printf("Updating %s to %ld\r\n", TELEMETRY_INTERVAL_PROPERTY, telemetry_interval);
+            printf("Updating %s to %d\r\n", TELEMETRY_INTERVAL_PROPERTY, (int)telemetry_interval);
 
             // Confirm reception back to hub
             azure_nx_client_respond_int_writable_property(
@@ -319,7 +376,7 @@ static void property_received_cb(AZURE_IOT_NX_CONTEXT* nx_context,
         status = nx_azure_iot_json_reader_token_int32_get(json_reader_ptr, &telemetry_interval);
         if (status == NX_AZURE_IOT_SUCCESS)
         {
-            printf("Updating %s to %ld\r\n", TELEMETRY_INTERVAL_PROPERTY, telemetry_interval);
+            printf("Updating %s to %d\r\n", TELEMETRY_INTERVAL_PROPERTY, (int)telemetry_interval);
             azure_nx_client_periodic_interval_set(nx_context, telemetry_interval);
         }
     }
@@ -413,8 +470,13 @@ UINT azure_iot_nx_client_entry(
 #ifdef ENABLE_DPS
     azure_iot_nx_client_dps_run(&azure_iot_nx_client, IOT_DPS_ID_SCOPE, IOT_DPS_REGISTRATION_ID, wwd_network_connect);
 #else
-    azure_iot_nx_client_hub_run(&azure_iot_nx_client, IOT_HUB_HOSTNAME, IOT_HUB_DEVICE_ID, wwd_network_connect);
-#endif
-
-    return NX_SUCCESS;
+UINT azure_iot_nx_client_entry(
+    NX_IP* ip_ptr, 
+    NX_PACKET_POOL* pool_ptr, 
+    NX_DNS* dns_ptr, 
+    UINT (*time_get)(ULONG *unix_time))
+{
+    // This is a stub function since we are not using Azure IoT
+    printf("Azure IoT functionality has been disabled\r\n");
+    return NX_NOT_IMPLEMENTED; 
 }

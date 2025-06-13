@@ -6,11 +6,11 @@ set(TX_USER_FILE "${CMAKE_CURRENT_LIST_DIR}/threadx/tx_user.h" CACHE STRING "Ena
 
 # Define NetXDuo user configuration
 set(NX_USER_FILE "${CMAKE_CURRENT_LIST_DIR}/netxduo/nx_user.h" CACHE STRING "Enable NX user configuration")
-set(NXD_ENABLE_AZURE_IOT ON CACHE BOOL "Enable Azure IoT")
+set(NXD_ENABLE_AZURE_IOT OFF CACHE BOOL "Enable Azure IoT")
 set(NXD_ENABLE_FILE_SERVERS OFF CACHE BOOL "Disable fileX dependency by netxduo")
 
 # Azure security module
-set(NX_AZURE_DISABLE_IOT_SECURITY_MODULE OFF CACHE BOOL "Security Module")
+set(NX_AZURE_DISABLE_IOT_SECURITY_MODULE ON CACHE BOOL "Security Module")
 
 # Core libraries
 add_subdirectory(${SHARED_LIB_DIR}/threadx threadx)

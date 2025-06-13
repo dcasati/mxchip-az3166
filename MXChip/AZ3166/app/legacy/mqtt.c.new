@@ -1,0 +1,576 @@
+/* Copyright (c) Microsoft Corporation.
+   Licensed under the MIT License. */
+
+#include "mqtt.h"
+
+#include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
+
+#include "screen.h"
+#include "sensor.h"
+#include "stm32f4xx_hal.h"
+
+#include "sntp_client.h"
+
+#include "azure_config.h"
+
+// Define packet pool payload size if not already defined
+#ifndef NX_PACKET_POOL_PAYLOAD_SIZE
+#define NX_PACKET_POOL_PAYLOAD_SIZE 1536
+#endif
+
+// MQTT client settings
+#define TELEMETRY_INTERVAL_PROPERTY "telemetryInterval"
+#define LED_STATE_PROPERTY          "ledState"
+
+#define TELEMETRY_INTERVAL_EVENT 1
+
+// MQTT client settings for custom broker
+#define MQTT_CLIENT_STACK_SIZE        4096
+#define MQTT_CLIENT_PRIORITY          2
+#define MQTT_TIMEOUT                  (10 * TX_TIMER_TICKS_PER_SECOND)
+#define MQTT_KEEP_ALIVE               240
+#define MQTT_TELEMETRY_QOS            1
+
+// MQTT client instance
+static NXD_MQTT_CLIENT mqtt_client;
+static TX_EVENT_FLAGS_GROUP mqtt_events;
+
+// Default telemetry interval
+static const INT telemetry_interval = DEFAULT_TELEMETRY_INTERVAL;
+
+// Telemetry state tracking
+static UINT telemetry_state = 0;
+
+// Forward declaration of LED control function
+static void set_led_state(bool level);
+
+// MQTT message callback function 
+static VOID mqtt_message_callback(NXD_MQTT_CLIENT *client_ptr, UINT number_of_messages)
+{
+    UINT status;
+    UCHAR message_buffer[NX_PACKET_POOL_PAYLOAD_SIZE];
+    UINT message_length;
+    UCHAR topic_buffer[128];
+    UINT topic_length;
+
+    // Process all messages in the queue
+    while (number_of_messages > 0)
+    {
+        number_of_messages--;
+
+        // Get the next message in the queue
+        status = nxd_mqtt_client_message_get(client_ptr, topic_buffer, sizeof(topic_buffer), &topic_length,
+                                            message_buffer, sizeof(message_buffer), &message_length);
+        if (status == NXD_MQTT_SUCCESS)
+        {
+            // Ensure null termination
+            topic_buffer[topic_length] = 0;
+            message_buffer[message_length] = 0;
+
+            printf("Received message: topic=%s, message=%s\r\n", topic_buffer, message_buffer);
+
+            // Check if this is a LED control message
+            if (strncmp((CHAR*)topic_buffer, MQTT_LED_TOPIC, topic_length) == 0)
+            {
+                // Process LED command
+                if (strncmp((CHAR*)message_buffer, "ON", message_length) == 0)
+                {
+                    set_led_state(true);
+                }
+                else if (strncmp((CHAR*)message_buffer, "OFF", message_length) == 0)
+                {
+                    set_led_state(false);
+                }
+            }
+        }
+        else
+        {
+            printf("Error getting MQTT message: 0x%08lx\r\n", (unsigned long)status);
+            break;
+        }
+    }
+}
+
+// LED control function
+static void set_led_state(bool level)
+{
+    if (level)
+    {
+        printf("LED is turned ON\r\n");
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+    }
+    else
+    {
+        printf("LED is turned OFF\r\n");
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+    }
+}
+
+// MQTT disconnect callback
+static VOID mqtt_disconnect_callback(NXD_MQTT_CLIENT *client_ptr)
+{
+    printf("MQTT client disconnected\r\n");
+    
+    // Set event flag for reconnection
+    tx_event_flags_set(&mqtt_events, TELEMETRY_INTERVAL_EVENT, TX_OR);
+}
+
+UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_ptr, ULONG (*sntp_time_function)(VOID))
+{
+    UINT status;
+    static UCHAR mqtt_client_stack[MQTT_CLIENT_STACK_SIZE];
+    
+    NXD_ADDRESS server_ip;
+    UINT server_port = MQTT_BROKER_PORT;
+    
+    // Reset telemetry state counter for this session
+    telemetry_state = 0;
+    
+    printf("\r\n=============================\r\n");
+    printf("MQTT Client Initialization\r\n");
+    printf("=============================\r\n");
+    
+    // Initialize event flags for MQTT events
+    if ((status = tx_event_flags_create(&mqtt_events, "MQTT Events")))
+    {
+        printf("FAIL: Unable to create MQTT event flags (0x%08lx)\r\n", (unsigned long)status);
+        return status;
+    }
+    
+    printf("Initializing MQTT client to connect to broker: %s:%d\r\n", MQTT_BROKER_HOSTNAME, MQTT_BROKER_PORT);
+    printf("Using client ID: %s\r\n", MQTT_CLIENT_ID);
+    if (strlen(MQTT_USERNAME) > 0) {
+        printf("Using authentication with username: %s\r\n", MQTT_USERNAME);
+    } else {
+        printf("No authentication credentials configured\r\n");
+    }
+    
+    // Create MQTT client instance
+    status = nxd_mqtt_client_create(&mqtt_client,
+                               "MQTT Client",
+                               MQTT_CLIENT_ID,
+                               strlen(MQTT_CLIENT_ID),
+                               ip_ptr,
+                               pool_ptr,
+                               mqtt_client_stack,
+                               MQTT_CLIENT_STACK_SIZE,
+                               MQTT_CLIENT_PRIORITY,
+                               NX_NULL,
+                               0);
+    
+    if (status != NXD_MQTT_SUCCESS)
+    {
+        printf("FAIL: Failed to create MQTT client (0x%08lx)\r\n", (unsigned long)status);
+        return status;
+    }
+    printf("SUCCESS: MQTT client created\r\n");
+    
+    // Register callbacks
+    nxd_mqtt_client_receive_notify_set(&mqtt_client, mqtt_message_callback);
+    printf("Registered message callback\r\n");
+    
+    nxd_mqtt_client_disconnect_notify_set(&mqtt_client, mqtt_disconnect_callback);
+    printf("Registered disconnect callback\r\n");
+    
+    // Connect to the broker
+    printf("\r\nIP Address Resolution\r\n");
+    printf("-------------------\r\n");
+    printf("Checking if broker address is an IP or hostname: %s\r\n", MQTT_BROKER_HOSTNAME);
+    
+    // Variable to store IP components when parsing
+    UINT ip_0, ip_1, ip_2, ip_3;
+    
+    // Check if the hostname is an IP address (simple parsing for IPv4)
+    if (sscanf(MQTT_BROKER_HOSTNAME, "%u.%u.%u.%u", &ip_0, &ip_1, &ip_2, &ip_3) == 4)
+    {
+        // It's an IP address, so convert directly
+        printf("Direct IP address detected: %s\r\n", MQTT_BROKER_HOSTNAME);
+        
+        // Ensure the IP components are valid (0-255)
+        if (ip_0 <= 255 && ip_1 <= 255 && ip_2 <= 255 && ip_3 <= 255)
+        {
+            // For NetworkX, IP address is stored in host byte order
+            ULONG host_byte_order_ip = (ip_0 << 24) | (ip_1 << 16) | (ip_2 << 8) | ip_3;
+            server_ip.nxd_ip_address.v4 = host_byte_order_ip;
+            
+            printf("SUCCESS: Using direct IP: %u.%u.%u.%u (0x%08lx)\r\n", 
+                   ip_0, ip_1, ip_2, ip_3, (unsigned long)host_byte_order_ip);
+        }
+        else
+        {
+            printf("FAIL: Invalid IP address format: %s\r\n", MQTT_BROKER_HOSTNAME);
+            return NX_DNS_QUERY_FAILED;
+        }
+    }
+    else
+    {
+        // It's a hostname, resolve via DNS
+        printf("Resolving hostname via DNS: %s\r\n", MQTT_BROKER_HOSTNAME);
+        
+        // Resolve hostname to IP address
+        status = nx_dns_host_by_name_get(dns_ptr, 
+                                        (UCHAR *)MQTT_BROKER_HOSTNAME, 
+                                        &server_ip.nxd_ip_address.v4, 
+                                        5 * NX_IP_PERIODIC_RATE);
+                                        
+        if (status != NX_SUCCESS)
+        {
+            printf("FAIL: Failed to resolve MQTT broker hostname (0x%02lx)\r\n", (unsigned long)status);
+            printf("      Check that the hostname is correct in azure_config.h\r\n");
+            printf("      and that DNS is properly configured.\r\n");
+            return status;
+        }
+        
+        printf("SUCCESS: Hostname resolved via DNS\r\n");
+    }
+    
+    // Set IP version
+    server_ip.nxd_ip_version = NX_IP_VERSION_V4;
+    
+    printf("SUCCESS: Resolved to IP: %u.%u.%u.%u\r\n", 
+           (UINT)((server_ip.nxd_ip_address.v4 >> 24) & 0xFF),
+           (UINT)((server_ip.nxd_ip_address.v4 >> 16) & 0xFF),
+           (UINT)((server_ip.nxd_ip_address.v4 >> 8) & 0xFF),
+           (UINT)(server_ip.nxd_ip_address.v4 & 0xFF));
+    
+    // Set credentials if provided
+    printf("\r\nMQTT Authentication\r\n");
+    printf("-------------------\r\n");
+    if (strlen(MQTT_USERNAME) > 0)
+    {
+        printf("Setting MQTT credentials for user: %s\r\n", MQTT_USERNAME);
+        
+        status = nxd_mqtt_client_login_set(&mqtt_client, 
+                                          MQTT_USERNAME, 
+                                          strlen(MQTT_USERNAME),
+                                          MQTT_PASSWORD, 
+                                          strlen(MQTT_PASSWORD));
+        if (status != NXD_MQTT_SUCCESS)
+        {
+            printf("FAIL: Failed to set MQTT login credentials (0x%02lx)\r\n", (unsigned long)status);
+            return status;
+        }
+        printf("SUCCESS: MQTT credentials set\r\n");
+    }
+    else
+    {
+        printf("No authentication credentials provided, connecting anonymously\r\n");
+    }
+    
+    // Connect to broker
+    printf("\r\nMQTT Connection\r\n");
+    printf("-------------------\r\n");
+    printf("Connecting to MQTT broker at %u.%u.%u.%u:%u\r\n",
+           (UINT)((server_ip.nxd_ip_address.v4 >> 24) & 0xFF),
+           (UINT)((server_ip.nxd_ip_address.v4 >> 16) & 0xFF),
+           (UINT)((server_ip.nxd_ip_address.v4 >> 8) & 0xFF),
+           (UINT)(server_ip.nxd_ip_address.v4 & 0xFF),
+           (UINT)server_port);
+           
+    printf("Keep alive: %d seconds\r\n", MQTT_KEEP_ALIVE);
+    printf("Clean session: Yes\r\n");
+    
+    // Make sure IP version is set correctly
+    server_ip.nxd_ip_version = NX_IP_VERSION_V4;
+    
+    // Debug: Show IP address we're using
+    printf("Using IP address: 0x%08lx (%u.%u.%u.%u):%u\r\n", 
+           (unsigned long)server_ip.nxd_ip_address.v4,
+           (UINT)((server_ip.nxd_ip_address.v4 >> 24) & 0xFF),
+           (UINT)((server_ip.nxd_ip_address.v4 >> 16) & 0xFF),
+           (UINT)((server_ip.nxd_ip_address.v4 >> 8) & 0xFF),
+           (UINT)(server_ip.nxd_ip_address.v4 & 0xFF),
+           server_port);
+    
+    // Skip direct TCP test to simplify troubleshooting
+    /*
+    // Test TCP connectivity to MQTT broker before attempting MQTT connection
+    NX_TCP_SOCKET test_socket;
+    */
+    
+    // Simplify the connection process by using the server_ip directly
+    printf("Connecting to MQTT broker...\r\n");
+    status = nxd_mqtt_client_connect(&mqtt_client, 
+                                    &server_ip, 
+                                    server_port,
+                                    MQTT_KEEP_ALIVE, 
+                                    NX_TRUE,  // Clean session
+                                    NX_WAIT_FOREVER);
+
+    if (status != NXD_MQTT_SUCCESS)
+    {
+        printf("FAIL: Failed to connect to MQTT broker (0x%08lx)\r\n", (unsigned long)status);
+        printf("Common issues:\r\n");
+        printf("  - Check if the broker is running and accessible\r\n");
+        printf("  - Verify the port number is correct\r\n");
+        printf("  - Check if authentication is required\r\n");
+        printf("  - Ensure there's no firewall blocking the connection\r\n");
+        
+        // Check for specific MQTT error codes
+        if (status == NXD_MQTT_CONNECT_FAILURE)
+        {
+            printf("  - MQTT connection failure (NXD_MQTT_CONNECT_FAILURE: 0x%08lx)\r\n", (unsigned long)NXD_MQTT_CONNECT_FAILURE);
+            printf("  - TCP connection could not be established\r\n");
+            printf("  - Is the broker accepting connections on port %u?\r\n", (UINT)server_port);
+        }
+        else if (status == NXD_MQTT_NOT_CONNECTED)
+        {
+            printf("  - MQTT client not connected (NXD_MQTT_NOT_CONNECTED: 0x%08lx)\r\n", (unsigned long)NXD_MQTT_NOT_CONNECTED);
+            printf("  - Check network connectivity\r\n");
+        }
+        else if (status == NXD_MQTT_COMMUNICATION_FAILURE) 
+        {
+            printf("  - MQTT communication failure (NXD_MQTT_COMMUNICATION_FAILURE: 0x%08lx)\r\n", (unsigned long)NXD_MQTT_COMMUNICATION_FAILURE);
+            printf("  - Connection was established but communication failed\r\n");
+        }
+        else
+        {
+            // For other error types, check NetX error codes (lower 16 bits)
+            switch (status & 0x0000FFFF)
+            {
+                case NX_NOT_CONNECTED:
+                    printf("  - TCP socket is not connected (NX_NOT_CONNECTED: 0x%02x)\r\n", NX_NOT_CONNECTED);
+                    printf("  - Is the broker accepting connections on port %u?\r\n", (UINT)server_port);
+                    break;
+                    
+                case NX_IN_PROGRESS:
+                    printf("  - Connection attempt is still in progress (NX_IN_PROGRESS: 0x%02x)\r\n", NX_IN_PROGRESS);
+                    break;
+                    
+                case NX_WAIT_ABORTED:
+                    printf("  - Connection wait was aborted (NX_WAIT_ABORTED: 0x%02x)\r\n", NX_WAIT_ABORTED);
+                    break;
+                    
+                case NX_INVALID_PARAMETERS:
+                    printf("  - Invalid parameters for connection (NX_INVALID_PARAMETERS: 0x%02x)\r\n", NX_INVALID_PARAMETERS);
+                    break;
+                    
+                case NX_NO_RESPONSE:
+                    printf("  - No response from the server (NX_NO_RESPONSE: 0x%02x)\r\n", NX_NO_RESPONSE);
+                    printf("  - Check that the broker is running and accessible\r\n");
+                    break;
+                    
+                default:
+                    printf("  - Unknown connection error: 0x%08lx\r\n", (unsigned long)status);
+                    printf("  - Check logs for more details\r\n");
+                    break;
+            }
+        }
+        
+        return status;
+    }
+    
+    printf("SUCCESS: Connected to MQTT broker\r\n");
+    
+    printf("\r\nMQTT Subscriptions\r\n");
+    printf("-------------------\r\n");
+    
+    // Subscribe to the command topic
+    printf("Subscribing to command topic: %s (QoS %d)\r\n", MQTT_COMMAND_TOPIC, MQTT_TELEMETRY_QOS);
+    status = nxd_mqtt_client_subscribe(&mqtt_client, 
+                                      MQTT_COMMAND_TOPIC, 
+                                      strlen(MQTT_COMMAND_TOPIC),
+                                      MQTT_TELEMETRY_QOS);
+                                      
+    if (status != NXD_MQTT_SUCCESS)
+    {
+        printf("FAIL: Failed to subscribe to command topic (0x%08lx)\r\n", (unsigned long)status);
+        return status;
+    }
+    printf("SUCCESS: Subscribed to command topic: %s\r\n", MQTT_COMMAND_TOPIC);
+    
+    // Subscribe to the LED topic
+    printf("Subscribing to LED control topic: %s (QoS %d)\r\n", MQTT_LED_TOPIC, MQTT_TELEMETRY_QOS);
+    status = nxd_mqtt_client_subscribe(&mqtt_client, 
+                                      MQTT_LED_TOPIC, 
+                                      strlen(MQTT_LED_TOPIC),
+                                      MQTT_TELEMETRY_QOS);
+                                      
+    if (status != NXD_MQTT_SUCCESS)
+    {
+        printf("FAIL: Failed to subscribe to LED topic (0x%08lx)\r\n", (unsigned long)status);
+    }
+    else
+    {
+        printf("SUCCESS: Subscribed to LED control topic: %s\r\n", MQTT_LED_TOPIC);
+    }
+    
+    // Initialize the LED (off)
+    set_led_state(false);
+    
+    // Update screen
+    printf("\r\nMQTT Telemetry\r\n");
+    printf("-------------------\r\n");
+    printf("Starting MQTT telemetry loop - interval: %d seconds\r\n", telemetry_interval);
+    printf("Publishing to topic: %s\r\n", MQTT_TELEMETRY_TOPIC);
+    printf("Press button B to exit (not implemented yet)\r\n");
+    
+    screen_print("Custom MQTT", L0);
+    screen_print(MQTT_BROKER_HOSTNAME, L1);
+    
+    // Main telemetry loop
+    while (true)
+    {
+        // Wait for events or timeout for regular telemetry
+        ULONG events;
+        tx_event_flags_get(
+            &mqtt_events, TELEMETRY_INTERVAL_EVENT, TX_OR_CLEAR, &events, telemetry_interval * NX_IP_PERIODIC_RATE);
+            
+        // Declare message buffer once for all cases
+        CHAR mqtt_message_buffer[128];
+        UINT message_length;
+        
+        switch (telemetry_state)
+        {
+            case 0:
+                // Send temperature data
+                {
+                    lps22hb_t lps22hb_data = lps22hb_data_read();
+                    sprintf(mqtt_message_buffer, "{\"temperature\": %.2f}", (double)lps22hb_data.temperature_degC);
+                    message_length = strlen(mqtt_message_buffer);
+                    printf("Publishing temperature: %.2f°C\r\n", (double)lps22hb_data.temperature_degC);
+                    printf("Topic: %s\r\n", MQTT_TELEMETRY_TOPIC);
+                    printf("Message: %s\r\n", mqtt_message_buffer);
+                
+                    status = nxd_mqtt_client_publish(&mqtt_client, 
+                                                   MQTT_TELEMETRY_TOPIC,
+                                                   strlen(MQTT_TELEMETRY_TOPIC),
+                                                   (CHAR*)mqtt_message_buffer,
+                                                   message_length,
+                                                   NX_TRUE,
+                                                   MQTT_TELEMETRY_QOS,
+                                                   NX_WAIT_FOREVER);
+                                                   
+                    if (status != NXD_MQTT_SUCCESS)
+                    {
+                        printf("FAIL: Failed to publish temperature message (0x%08lx)\r\n", (unsigned long)status);
+                    }
+                    else
+                    {
+                        printf("SUCCESS: Temperature data published\r\n");
+                    }
+                }
+                break;
+
+            case 1:
+                // Send pressure data
+                {
+                    lps22hb_t lps22hb_data = lps22hb_data_read();
+                    sprintf(mqtt_message_buffer, "{\"pressure\": %.2f}", (double)lps22hb_data.pressure_hPa);
+                    message_length = strlen(mqtt_message_buffer);
+                    printf("Publishing: %s\r\n", mqtt_message_buffer);
+                
+                    status = nxd_mqtt_client_publish(&mqtt_client, 
+                                                   MQTT_TELEMETRY_TOPIC,
+                                                   strlen(MQTT_TELEMETRY_TOPIC),
+                                                   (CHAR*)mqtt_message_buffer,
+                                                   message_length,
+                                                   NX_TRUE,
+                                                   MQTT_TELEMETRY_QOS,
+                                                   NX_WAIT_FOREVER);
+                                                   
+                    if (status != NXD_MQTT_SUCCESS)
+                    {
+                        printf("FAIL: Failed to publish pressure message (0x%08lx)\r\n", (unsigned long)status);
+                    }
+                }
+                break;
+
+            case 2:
+                // Send humidity data
+                {
+                    hts221_data_t hts221_data = hts221_data_read();
+                    sprintf(mqtt_message_buffer, "{\"humidity\": %.2f}", (double)hts221_data.humidity_perc);
+                    message_length = strlen(mqtt_message_buffer);
+                    printf("Publishing: %s\r\n", mqtt_message_buffer);
+                
+                    status = nxd_mqtt_client_publish(&mqtt_client, 
+                                                   MQTT_TELEMETRY_TOPIC,
+                                                   strlen(MQTT_TELEMETRY_TOPIC),
+                                                   (CHAR*)mqtt_message_buffer,
+                                                   message_length,
+                                                   NX_TRUE,
+                                                   MQTT_TELEMETRY_QOS,
+                                                   NX_WAIT_FOREVER);
+                                                   
+                    if (status != NXD_MQTT_SUCCESS)
+                    {
+                        printf("FAIL: Failed to publish humidity message (0x%08lx)\r\n", (unsigned long)status);
+                    }
+                    else
+                    {
+                        printf("SUCCESS: Humidity data published\r\n");
+                    }
+                }
+                break;
+
+            case 3:
+                // Send acceleration data
+                {
+                    lsm6dsl_data_t lsm6dsl_data = lsm6dsl_data_read();
+                    sprintf(mqtt_message_buffer, "{\"acceleration\": %.2f}", (double)lsm6dsl_data.acceleration_mg[0]);
+                    message_length = strlen(mqtt_message_buffer);
+                    printf("Publishing: %s\r\n", mqtt_message_buffer);
+                
+                    status = nxd_mqtt_client_publish(&mqtt_client, 
+                                                   MQTT_TELEMETRY_TOPIC,
+                                                   strlen(MQTT_TELEMETRY_TOPIC),
+                                                   (CHAR*)mqtt_message_buffer,
+                                                   message_length,
+                                                   NX_TRUE,
+                                                   MQTT_TELEMETRY_QOS,
+                                                   NX_WAIT_FOREVER);
+                                                   
+                    if (status != NXD_MQTT_SUCCESS)
+                    {
+                        printf("FAIL: Failed to publish acceleration message (0x%08lx)\r\n", (unsigned long)status);
+                    }
+                    else
+                    {
+                        printf("SUCCESS: Acceleration data published\r\n");
+                    }
+                }
+                break;
+
+            case 4:
+                // Send magnetic field data
+                {
+                    lis2mdl_data_t lis2mdl_data = lis2mdl_data_read();
+                    sprintf(mqtt_message_buffer, "{\"magnetic\": %.2f}", (double)lis2mdl_data.magnetic_mG[0]);
+                    message_length = strlen(mqtt_message_buffer);
+                    printf("Publishing: %s\r\n", mqtt_message_buffer);
+                
+                    status = nxd_mqtt_client_publish(&mqtt_client, 
+                                                   MQTT_TELEMETRY_TOPIC,
+                                                   strlen(MQTT_TELEMETRY_TOPIC),
+                                                   (CHAR*)mqtt_message_buffer,
+                                                   message_length,
+                                                   NX_TRUE,
+                                                   MQTT_TELEMETRY_QOS,
+                                                   NX_WAIT_FOREVER);
+                                                   
+                    if (status != NXD_MQTT_SUCCESS)
+                    {
+                        printf("FAIL: Failed to publish magnetic field message (0x%08lx)\r\n", (unsigned long)status);
+                    }
+                    else
+                    {
+                        printf("SUCCESS: Magnetic field data published\r\n");
+                    }
+                }
+                break;
+        }
+        
+        // Move to the next telemetry type
+        telemetry_state = (telemetry_state + 1) % 5;
+    }
+
+    // Clean up (this will never execute in the current implementation)
+    nxd_mqtt_client_disconnect(&mqtt_client);
+    nxd_mqtt_client_delete(&mqtt_client);
+    tx_event_flags_delete(&mqtt_events);
+
+    return NXD_MQTT_SUCCESS;
+}
