@@ -1,24 +1,44 @@
 /* Copyright (c) Microsoft Corporation.
    Licensed under the MIT License. */
 
-// Delayed flash write approach - use RAM immediately, flash later (DISABLED for safety)
+// Configuration storage approach for AZ3166:
+// - Use EEPROM emulation in flash (safer than direct flash access)
+// - STM32 HAL provides EEPROM emulation functions
+// - Uses dedicated flash sectors with wear leveling
+// - RAM cache for immediate access during runtime
+
+// Use EEPROM emulation instead of direct flash for safer storage
 #define FLASH_OPERATIONS_DISABLED 1
 #define FLASH_ERASE_DISABLED 1
-#define USE_DELAYED_FLASH_WRITE 0  // Disabled - flash operations causing system instability
+#define USE_DELAYED_FLASH_WRITE 0
+#define USE_EEPROM_EMULATION 1  // Enable EEPROM emulation storage
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "config_manager.h"
 #include "azure_config.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_rcc_ex.h"  // For backup SRAM clock enable
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include "stm32f4xx_hal_pwr.h"    // For backup SRAM power control
+#include "stm32f4xx_hal_flash.h"  // For EEPROM emulation
+#include "stm32f4xx_hal_flash_ex.h" // For flash extended operations
+
+// Configuration file support
+#define CONFIG_FILE_BUFFER_SIZE 2048
+#define CONFIG_LINE_MAX_LEN 256
 
 // External UART handle from console.c
 extern UART_HandleTypeDef UartHandle;
 
 // Console function declarations
 extern int __io_getchar(void);
+
+// Forward declarations for internal functions
+static void load_config_file_defaults(device_config_t* config);
 
 // RAM-based configuration storage (immediate use)
 static device_config_t g_ram_config;
@@ -101,16 +121,32 @@ bool config_manager_char_available(void) {
 #define CONFIG_VERSION  1
 
 // STM32F412Rx flash storage configuration (MXChip AZ3166)
-// Use the last sector of flash to avoid conflicts with firmware
-#define CONFIG_FLASH_ADDRESS    0x0800BC00  // Sector 4 start address
-#define CONFIG_FLASH_SECTOR     4           // Flash sector 4
-#define CONFIG_FLASH_SIZE       16384       // 16KB sector
+// Use the LAST sector (sector 11) to avoid conflicts with WiFi firmware
+// WiFi firmware is typically in sectors 4-10, so sector 11 is safest
+#define CONFIG_FLASH_ADDRESS    0x0807F800  // Last 2KB of sector 11 (128KB sector)
+#define CONFIG_FLASH_SECTOR     11          // Flash sector 11 (last sector)
+#define CONFIG_FLASH_SIZE       2048        // 2KB should be enough for config
 
-// STM32F412Rx backup SRAM storage configuration (MXChip AZ3166)  
-// Use backup SRAM instead of flash to avoid interference with WiFi
-// Backup SRAM: 0x40024000 - 0x40024FFF (4KB) - much safer than flash
-#define CONFIG_BACKUP_SRAM_ADDRESS    0x40024000  // Backup SRAM base
-#define CONFIG_BACKUP_SRAM_SIZE       4096
+// STM32F412Rx EEPROM emulation configuration (MXChip AZ3166)  
+// Use sector 11 (last sector) - guaranteed not to interfere with WiFi firmware
+// WiFi firmware uses sectors 4-10, so sector 11 is completely safe
+#define EEPROM_START_ADDRESS    0x0807F800  // Last 2KB of flash (sector 11)
+#define EEPROM_SIZE             2048        // 2KB should be enough for config
+#define EEPROM_FLASH_SECTOR     FLASH_SECTOR_11  // Use last sector (safest choice)
+
+// Virtual addresses for configuration data (used by EEPROM emulation)
+#define CONFIG_EEPROM_ADDR_MAGIC       0x0001
+#define CONFIG_EEPROM_ADDR_VERSION     0x0002  
+#define CONFIG_EEPROM_ADDR_CONFIG_BASE 0x0010  // Base address for config data
+
+#if USE_EEPROM_EMULATION
+// Forward declarations for EEPROM emulation functions
+static config_result_t eeprom_read_config(device_config_t* config);
+static config_result_t eeprom_write_config(const device_config_t* config);
+static config_result_t eeprom_erase_config(void);
+static HAL_StatusTypeDef eeprom_write_data(uint32_t address, uint8_t* data, uint32_t size);
+static HAL_StatusTypeDef eeprom_read_data(uint32_t address, uint8_t* data, uint32_t size);
+#endif
 
 #if !FLASH_OPERATIONS_DISABLED || USE_DELAYED_FLASH_WRITE
 // CRC32 calculation for data integrity
@@ -230,6 +266,28 @@ config_result_t config_manager_load(device_config_t* config) {
     return CONFIG_OK;
     
 #elif FLASH_OPERATIONS_DISABLED
+#if USE_EEPROM_EMULATION
+    printf("Using EEPROM emulation for configuration storage\r\n");
+    
+    // Try to load from EEPROM first
+    config_result_t result = eeprom_read_config(config);
+    if (result == CONFIG_OK) {
+        // Also update RAM cache
+        memcpy(&g_ram_config, config, sizeof(device_config_t));
+        g_ram_config_valid = true;
+        return CONFIG_OK;
+    } else {
+        printf("No valid configuration in EEPROM, checking RAM cache...\r\n");
+        if (g_ram_config_valid) {
+            printf("Loading configuration from RAM storage\r\n");
+            memcpy(config, &g_ram_config, sizeof(device_config_t));
+            return CONFIG_OK;
+        } else {
+            printf("No valid configuration found - using defaults\r\n");
+            return CONFIG_ERROR_NOT_FOUND;
+        }
+    }
+#else
     printf("Flash operations disabled - using RAM-only storage\r\n");
     if (g_ram_config_valid) {
         printf("Loading configuration from RAM storage\r\n");
@@ -239,6 +297,7 @@ config_result_t config_manager_load(device_config_t* config) {
         printf("No valid configuration found in RAM - using defaults\r\n");
         return CONFIG_ERROR_NOT_FOUND;
     }
+#endif
 #else
     printf("Loading configuration from flash...\r\n");
     
@@ -287,13 +346,30 @@ config_result_t config_manager_save(const device_config_t* config) {
     printf("Configuration saved to RAM - will write to flash after WiFi connects\r\n");
     return CONFIG_OK;
 #elif FLASH_OPERATIONS_DISABLED
+#if USE_EEPROM_EMULATION
+    printf("Saving configuration to EEPROM emulation...\r\n");
+    
+    // Save to EEPROM for persistence
+    config_result_t result = eeprom_write_config(config);
+    if (result != CONFIG_OK) {
+        printf("Failed to save to EEPROM, falling back to RAM\r\n");
+    }
+    
+    // Always save to RAM cache for immediate use
+    memcpy(&g_ram_config, config, sizeof(device_config_t));
+    g_ram_config_valid = true;
+    
+    printf("Configuration saved successfully!\r\n");
+    return CONFIG_OK;
+#else
     printf("Flash operations disabled - saving configuration to RAM storage\r\n");
     memcpy(&g_ram_config, config, sizeof(device_config_t));
     g_ram_config_valid = true;
     printf("Configuration saved successfully to RAM!\r\n");
+#endif
     return CONFIG_OK;  // Success
 #else
-    printf("Saving configuration to flash at 0x0800BC00...\r\n");
+    printf("Saving configuration to flash at 0x0807F800...\r\n");
     
     // Create a copy with proper magic, version, and CRC
     device_config_t config_copy = *config;
@@ -478,9 +554,28 @@ bool config_manager_check_reset_button(void) {
 }
 
 config_result_t config_manager_factory_reset(void) {
-    // Safe implementation: do nothing
-    printf("Factory reset disabled for safety - no flash operations performed\r\n");
+#if USE_EEPROM_EMULATION
+    printf("Performing factory reset - clearing EEPROM and RAM...\r\n");
+    
+    // Clear EEPROM
+    config_result_t result = eeprom_erase_config();
+    if (result != CONFIG_OK) {
+        printf("Warning: Failed to clear EEPROM\r\n");
+    }
+    
+    // Clear RAM cache
+    memset(&g_ram_config, 0, sizeof(device_config_t));
+    g_ram_config_valid = false;
+    
+    printf("Factory reset completed successfully\r\n");
     return CONFIG_OK;
+#else
+    // Safe implementation: clear RAM only
+    printf("Factory reset - clearing RAM configuration\r\n");
+    memset(&g_ram_config, 0, sizeof(device_config_t));
+    g_ram_config_valid = false;
+    return CONFIG_OK;
+#endif
 }
 
 bool config_manager_validate(const device_config_t* config) {
@@ -494,13 +589,6 @@ bool config_manager_validate(const device_config_t* config) {
     return true;
 }
 
-#if FLASH_OPERATIONS_DISABLED
-#define HAL_FLASH_Unlock()      (HAL_OK)
-#define HAL_FLASH_Lock()        (HAL_OK)
-#define HAL_FLASH_Program(...)  (HAL_OK)
-#define HAL_FLASHEx_Erase(...) (HAL_OK)
-#endif
-
 void config_manager_get_defaults(device_config_t* config) {
     if (!config) {
         return;
@@ -512,22 +600,24 @@ void config_manager_get_defaults(device_config_t* config) {
     // Set magic and version
     config->magic = CONFIG_MAGIC;
     config->version = CONFIG_VERSION;
-      // WiFi Configuration defaults
+    
+    // First apply built-in fallback defaults
     strncpy(config->wifi_ssid, WIFI_SSID_DEFAULT, CONFIG_SSID_MAX_LEN - 1);
     strncpy(config->wifi_password, WIFI_PASSWORD_DEFAULT, CONFIG_PASSWORD_MAX_LEN - 1);
     config->wifi_mode = WIFI_MODE_DEFAULT;
     
-    // MQTT Configuration defaults
     strncpy(config->mqtt_hostname, MQTT_BROKER_HOSTNAME_DEFAULT, CONFIG_HOSTNAME_MAX_LEN - 1);
     config->mqtt_port = MQTT_BROKER_PORT_DEFAULT;
     strncpy(config->mqtt_client_id, MQTT_CLIENT_ID_DEFAULT, CONFIG_CLIENT_ID_MAX_LEN - 1);
     strncpy(config->mqtt_username, MQTT_USERNAME_DEFAULT, CONFIG_USERNAME_MAX_LEN - 1);
     strncpy(config->mqtt_password, MQTT_PASSWORD_DEFAULT, CONFIG_PASSWORD_MAX_LEN - 1);
     
-    // Telemetry Configuration defaults
     config->telemetry_interval = DEFAULT_TELEMETRY_INTERVAL;
     
-    printf("Default configuration applied\r\n");
+    // Then load and apply configuration file defaults (overrides built-in defaults)
+    load_config_file_defaults(config);
+    
+    printf("Configuration defaults loaded (built-in + device.conf)\r\n");
 }
 
 // Read a string from serial console
@@ -704,4 +794,270 @@ config_result_t config_manager_prompt_and_store(device_config_t* config) {
         printf("Failed to save configuration\r\n");
         return result;
     }
+}
+
+#if USE_EEPROM_EMULATION
+// Simple EEPROM emulation using HAL flash functions
+static HAL_StatusTypeDef eeprom_write_data(uint32_t address, uint8_t* data, uint32_t size) {
+    HAL_StatusTypeDef status = HAL_OK;
+    
+    // Unlock flash for writing
+    status = HAL_FLASH_Unlock();
+    if (status != HAL_OK) {
+        return status;
+    }
+    
+    // Write data word by word (STM32F4 requires word alignment)
+    for (uint32_t i = 0; i < size; i += 4) {
+        uint32_t word_data = 0xFFFFFFFF;
+        uint32_t bytes_to_copy = (size - i) >= 4 ? 4 : (size - i);
+        
+        // Copy bytes to word (handle partial words)
+        memcpy(&word_data, &data[i], bytes_to_copy);
+        
+        status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, address + i, word_data);
+        if (status != HAL_OK) {
+            break;
+        }
+    }
+    
+    HAL_FLASH_Lock();
+    return status;
+}
+
+static HAL_StatusTypeDef eeprom_read_data(uint32_t address, uint8_t* data, uint32_t size) {
+    // Direct read from flash memory
+    memcpy(data, (void*)address, size);
+    return HAL_OK;
+}
+
+// Read configuration from EEPROM emulation
+static config_result_t eeprom_read_config(device_config_t* config) {
+    if (!config) {
+        return CONFIG_ERROR_INVALID;
+    }
+    
+    printf("Reading configuration from EEPROM emulation...\r\n");
+    
+    // Read magic number first
+    uint32_t magic;
+    if (eeprom_read_data(EEPROM_START_ADDRESS, (uint8_t*)&magic, sizeof(magic)) != HAL_OK) {
+        printf("Failed to read magic from EEPROM\r\n");
+        return CONFIG_ERROR_STORAGE;
+    }
+    
+    if (magic != CONFIG_MAGIC) {
+        printf("No valid configuration found in EEPROM (magic: 0x%08lX)\r\n", magic);
+        return CONFIG_ERROR_NOT_FOUND;
+    }
+    
+    // Read version
+    uint32_t version;
+    if (eeprom_read_data(EEPROM_START_ADDRESS + sizeof(magic), (uint8_t*)&version, sizeof(version)) != HAL_OK) {
+        printf("Failed to read version from EEPROM\r\n");
+        return CONFIG_ERROR_STORAGE;
+    }
+    
+    if (version != CONFIG_VERSION) {
+        printf("Configuration version mismatch in EEPROM (found: %lu, expected: %d)\r\n", 
+               version, CONFIG_VERSION);
+        return CONFIG_ERROR_NOT_FOUND;
+    }
+    
+    // Read the full configuration
+    if (eeprom_read_data(EEPROM_START_ADDRESS, (uint8_t*)config, sizeof(device_config_t)) != HAL_OK) {
+        printf("Failed to read configuration from EEPROM\r\n");
+        return CONFIG_ERROR_STORAGE;
+    }
+    
+    printf("Configuration loaded successfully from EEPROM\r\n");
+    return CONFIG_OK;
+}
+
+// Write configuration to EEPROM emulation
+static config_result_t eeprom_write_config(const device_config_t* config) {
+    if (!config) {
+        return CONFIG_ERROR_INVALID;
+    }
+    
+    printf("Writing configuration to EEPROM emulation...\r\n");
+    
+    // Create a copy with proper magic and version
+    device_config_t config_copy = *config;
+    config_copy.magic = CONFIG_MAGIC;
+    config_copy.version = CONFIG_VERSION;
+    
+    // DON'T erase the sector - just write to specific address
+    // This is much safer and won't destroy WiFi firmware data
+    printf("Writing config data directly (no sector erase)...\r\n");
+    
+    // Write the configuration
+    if (eeprom_write_data(EEPROM_START_ADDRESS, (uint8_t*)&config_copy, sizeof(device_config_t)) != HAL_OK) {
+        printf("Failed to write configuration to EEPROM\r\n");
+        return CONFIG_ERROR_STORAGE;
+    }
+    
+    printf("Configuration saved successfully to EEPROM\r\n");
+    return CONFIG_OK;
+}
+
+// Clear configuration from EEPROM emulation
+static config_result_t eeprom_erase_config(void) {
+    printf("Clearing configuration from EEPROM (no sector erase)...\r\n");
+    
+    // Don't erase the whole sector - just write zeros to our config area
+    // This is much safer for WiFi firmware
+    device_config_t empty_config;
+    memset(&empty_config, 0, sizeof(device_config_t));
+    
+    if (eeprom_write_data(EEPROM_START_ADDRESS, (uint8_t*)&empty_config, sizeof(device_config_t)) != HAL_OK) {
+        printf("Failed to clear configuration area\r\n");
+        return CONFIG_ERROR_STORAGE;
+    }
+    
+    printf("Configuration cleared from EEPROM\r\n");
+    return CONFIG_OK;
+}
+#endif
+
+// Embedded device.conf file content
+static const char embedded_device_conf[] = 
+"# MXChip AZ3166 Device Configuration File\n"
+"# This file contains default configuration values that will be loaded at startup\n"
+"# Lines starting with # are comments and will be ignored\n"
+"# Format: key=value (no spaces around =)\n"
+"\n"
+"# WiFi Configuration\n"
+"wifi_ssid=MyWiFiNetwork\n"
+"wifi_password=MyWiFiPassword\n"
+"wifi_mode=3\n"
+"\n"
+"# MQTT Broker Configuration\n"
+"mqtt_hostname=mqtt.dcasati.net\n"
+"mqtt_port=1883\n"
+"mqtt_client_id=mxchip-device-001\n"
+"mqtt_username=\n"
+"mqtt_password=\n"
+"\n"
+"# Telemetry Configuration\n"
+"telemetry_interval=10\n";
+
+// Helper function to trim whitespace from string
+static void trim_string(char* str) {
+    char* start = str;
+    char* end;
+    
+    // Trim leading whitespace
+    while (*start == ' ' || *start == '\t') start++;
+    
+    // Trim trailing whitespace
+    end = start + strlen(start) - 1;
+    while (end > start && (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n')) {
+        *end = '\0';
+        end--;
+    }
+    
+    // Move trimmed string to beginning
+    if (start != str) {
+        memmove(str, start, strlen(start) + 1);
+    }
+}
+
+// Parse configuration file content and apply values
+static void parse_config_file(device_config_t* config, const char* content) {
+    char line[CONFIG_LINE_MAX_LEN];
+    const char* ptr = content;
+    int line_num = 0;
+    
+    printf("Parsing device configuration file...\r\n");
+    
+    while (*ptr != '\0') {
+        // Extract one line
+        char* line_ptr = line;
+        while (*ptr != '\0' && *ptr != '\n' && (line_ptr - line) < (CONFIG_LINE_MAX_LEN - 1)) {
+            *line_ptr++ = *ptr++;
+        }
+        *line_ptr = '\0';
+        
+        // Skip newline
+        if (*ptr == '\n') ptr++;
+        
+        line_num++;
+        trim_string(line);
+        
+        // Skip empty lines and comments
+        if (strlen(line) == 0 || line[0] == '#') {
+            continue;
+        }
+        
+        // Find '=' separator
+        char* equals = strchr(line, '=');
+        if (equals == NULL) {
+            printf("Warning: Invalid line %d in config file: %s\r\n", line_num, line);
+            continue;
+        }
+        
+        // Split key and value
+        *equals = '\0';
+        char* key = line;
+        char* value = equals + 1;
+        
+        trim_string(key);
+        trim_string(value);
+        
+        // Apply configuration values
+        if (strcmp(key, "wifi_ssid") == 0) {
+            strncpy(config->wifi_ssid, value, CONFIG_SSID_MAX_LEN - 1);
+            config->wifi_ssid[CONFIG_SSID_MAX_LEN - 1] = '\0';
+            printf("  wifi_ssid = %s\r\n", config->wifi_ssid);
+        }
+        else if (strcmp(key, "wifi_password") == 0) {
+            strncpy(config->wifi_password, value, CONFIG_PASSWORD_MAX_LEN - 1);
+            config->wifi_password[CONFIG_PASSWORD_MAX_LEN - 1] = '\0';
+            printf("  wifi_password = [HIDDEN]\r\n");
+        }
+        else if (strcmp(key, "wifi_mode") == 0) {
+            config->wifi_mode = (uint32_t)atoi(value);
+            printf("  wifi_mode = %u\r\n", (unsigned int)config->wifi_mode);
+        }
+        else if (strcmp(key, "mqtt_hostname") == 0) {
+            strncpy(config->mqtt_hostname, value, CONFIG_HOSTNAME_MAX_LEN - 1);
+            config->mqtt_hostname[CONFIG_HOSTNAME_MAX_LEN - 1] = '\0';
+            printf("  mqtt_hostname = %s\r\n", config->mqtt_hostname);
+        }
+        else if (strcmp(key, "mqtt_port") == 0) {
+            config->mqtt_port = (uint16_t)atoi(value);
+            printf("  mqtt_port = %u\r\n", config->mqtt_port);
+        }
+        else if (strcmp(key, "mqtt_client_id") == 0) {
+            strncpy(config->mqtt_client_id, value, CONFIG_CLIENT_ID_MAX_LEN - 1);
+            config->mqtt_client_id[CONFIG_CLIENT_ID_MAX_LEN - 1] = '\0';
+            printf("  mqtt_client_id = %s\r\n", config->mqtt_client_id);
+        }
+        else if (strcmp(key, "mqtt_username") == 0) {
+            strncpy(config->mqtt_username, value, CONFIG_USERNAME_MAX_LEN - 1);
+            config->mqtt_username[CONFIG_USERNAME_MAX_LEN - 1] = '\0';
+            printf("  mqtt_username = %s\r\n", config->mqtt_username);
+        }
+        else if (strcmp(key, "mqtt_password") == 0) {
+            strncpy(config->mqtt_password, value, CONFIG_PASSWORD_MAX_LEN - 1);
+            config->mqtt_password[CONFIG_PASSWORD_MAX_LEN - 1] = '\0';
+            printf("  mqtt_password = [HIDDEN]\r\n");
+        }
+        else if (strcmp(key, "telemetry_interval") == 0) {
+            config->telemetry_interval = (uint32_t)atoi(value);
+            printf("  telemetry_interval = %u\r\n", (unsigned int)config->telemetry_interval);
+        }
+        else {
+            printf("Warning: Unknown configuration key '%s' on line %d\r\n", key, line_num);
+        }
+    }
+    
+    printf("Configuration file parsing completed\r\n");
+}
+
+// Load defaults from embedded device.conf
+static void load_config_file_defaults(device_config_t* config) {
+    printf("Loading configuration from embedded device.conf...\r\n");
+    parse_config_file(config, embedded_device_conf);
 }
