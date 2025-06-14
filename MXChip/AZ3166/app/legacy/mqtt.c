@@ -703,8 +703,13 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
         tx_event_flags_get(
             &mqtt_events, TELEMETRY_INTERVAL_EVENT, TX_OR_CLEAR, &events, telemetry_interval * NX_IP_PERIODIC_RATE);
             
+<<<<<<< HEAD
         // Declare message buffer once for all cases (increased size for device name)
         CHAR mqtt_message_buffer[256];
+=======
+        // Declare message buffer once for all cases
+        CHAR mqtt_message_buffer[128];
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
         UINT message_length;
         
         switch (telemetry_state)
@@ -721,7 +726,11 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
                     printf("DEBUG: Temperature (HTS221) as int*100: %d (= %d.%02d°C)\r\n", temp_int, temp_whole, temp_frac);
                     
                     // Use integer formatting for JSON since floating point printf doesn't work
+<<<<<<< HEAD
                     sprintf(mqtt_message_buffer, "{\"device\": \"%s\", \"temperature\": %d.%02d}", MQTT_CLIENT_ID, temp_whole, temp_frac);
+=======
+                    sprintf(mqtt_message_buffer, "{\"temperature\": %d.%02d}", temp_whole, temp_frac);
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
                     message_length = strlen(mqtt_message_buffer);
                     printf("Publishing temperature (HTS221): %d.%02d°C\r\n", temp_whole, temp_frac);
                     printf("Topic: %s\r\n", MQTT_TELEMETRY_TOPIC);
@@ -758,7 +767,11 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
                     printf("DEBUG: Pressure as int*100: %d (= %d.%02d hPa)\r\n", pressure_int, pressure_whole, pressure_frac);
                     
                     // Use integer formatting for JSON since floating point printf doesn't work
+<<<<<<< HEAD
                     sprintf(mqtt_message_buffer, "{\"device\": \"%s\", \"pressure\": %d.%02d}", MQTT_CLIENT_ID, pressure_whole, pressure_frac);
+=======
+                    sprintf(mqtt_message_buffer, "{\"pressure\": %d.%02d}", pressure_whole, pressure_frac);
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
                     message_length = strlen(mqtt_message_buffer);
                     printf("Publishing: %s\r\n", mqtt_message_buffer);
                 
@@ -787,7 +800,11 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
                     int humidity_frac = humidity_int % 100;
                     
                     // Use integer formatting for JSON since floating point printf doesn't work
+<<<<<<< HEAD
                     sprintf(mqtt_message_buffer, "{\"device\": \"%s\", \"humidity\": %d.%02d}", MQTT_CLIENT_ID, humidity_whole, humidity_frac);
+=======
+                    sprintf(mqtt_message_buffer, "{\"humidity\": %d.%02d}", humidity_whole, humidity_frac);
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
                     message_length = strlen(mqtt_message_buffer);
                     printf("Publishing: %s\r\n", mqtt_message_buffer);
                 
@@ -820,8 +837,13 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
                     int accel_frac = abs(accel_int % 100); // Use abs() for negative values
                     
                     // Use integer formatting for JSON since floating point printf doesn't work
+<<<<<<< HEAD
                     sprintf(mqtt_message_buffer, "{\"device\": \"%s\", \"acceleration\": %s%d.%02d}", 
                             MQTT_CLIENT_ID, (accel_int < 0) ? "-" : "", abs(accel_whole), accel_frac);
+=======
+                    sprintf(mqtt_message_buffer, "{\"acceleration\": %s%d.%02d}", 
+                            (accel_int < 0) ? "-" : "", abs(accel_whole), accel_frac);
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
                     message_length = strlen(mqtt_message_buffer);
                     printf("Publishing: %s\r\n", mqtt_message_buffer);
                 
@@ -854,8 +876,13 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
                     int magnetic_frac = abs(magnetic_int % 100); // Use abs() for negative values
                     
                     // Use integer formatting for JSON since floating point printf doesn't work
+<<<<<<< HEAD
                     sprintf(mqtt_message_buffer, "{\"device\": \"%s\", \"magnetic\": %s%d.%02d}", 
                             MQTT_CLIENT_ID, (magnetic_int < 0) ? "-" : "", abs(magnetic_whole), magnetic_frac);
+=======
+                    sprintf(mqtt_message_buffer, "{\"magnetic\": %s%d.%02d}", 
+                            (magnetic_int < 0) ? "-" : "", abs(magnetic_whole), magnetic_frac);
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
                     message_length = strlen(mqtt_message_buffer);
                     printf("Publishing: %s\r\n", mqtt_message_buffer);
                 
@@ -897,8 +924,12 @@ UINT azure_iot_mqtt_entry(NX_IP* ip_ptr, NX_PACKET_POOL* pool_ptr, NX_DNS* dns_p
                     int gyro_z_frac = abs(gyro_z_int % 100);
                     
                     // Use integer formatting for JSON with all three axes
+<<<<<<< HEAD
                     sprintf(mqtt_message_buffer, "{\"device\": \"%s\", \"gyroscope\": {\"x\": %s%d.%02d, \"y\": %s%d.%02d, \"z\": %s%d.%02d}}", 
                             MQTT_CLIENT_ID,
+=======
+                    sprintf(mqtt_message_buffer, "{\"gyroscope\": {\"x\": %s%d.%02d, \"y\": %s%d.%02d, \"z\": %s%d.%02d}}", 
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
                             (gyro_x_int < 0) ? "-" : "", abs(gyro_x_whole), gyro_x_frac,
                             (gyro_y_int < 0) ? "-" : "", abs(gyro_y_whole), gyro_y_frac,
                             (gyro_z_int < 0) ? "-" : "", abs(gyro_z_whole), gyro_z_frac);

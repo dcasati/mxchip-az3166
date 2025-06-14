@@ -1,6 +1,7 @@
 /* Copyright (c) Microsoft Corporation.
    Licensed under the MIT License. */
 
+<<<<<<< HEAD
 // Configuration storage approach for AZ3166:
 // - Use EEPROM emulation in flash (safer than direct flash access)
 // - STM32 HAL provides EEPROM emulation functions
@@ -18,11 +19,18 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+=======
+// Delayed flash write approach - use RAM immediately, flash later (DISABLED for safety)
+#define FLASH_OPERATIONS_DISABLED 1
+#define FLASH_ERASE_DISABLED 1
+#define USE_DELAYED_FLASH_WRITE 0  // Disabled - flash operations causing system instability
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 
 #include "config_manager.h"
 #include "azure_config.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_rcc_ex.h"  // For backup SRAM clock enable
+<<<<<<< HEAD
 #include "stm32f4xx_hal_pwr.h"    // For backup SRAM power control
 #include "stm32f4xx_hal_flash.h"  // For EEPROM emulation
 #include "stm32f4xx_hal_flash_ex.h" // For flash extended operations
@@ -30,6 +38,11 @@
 // Configuration file support
 #define CONFIG_FILE_BUFFER_SIZE 2048
 #define CONFIG_LINE_MAX_LEN 256
+=======
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 
 // External UART handle from console.c
 extern UART_HandleTypeDef UartHandle;
@@ -37,9 +50,12 @@ extern UART_HandleTypeDef UartHandle;
 // Console function declarations
 extern int __io_getchar(void);
 
+<<<<<<< HEAD
 // Forward declarations for internal functions
 static void load_config_file_defaults(device_config_t* config);
 
+=======
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 // RAM-based configuration storage (immediate use)
 static device_config_t g_ram_config;
 static bool g_ram_config_valid = false;
@@ -121,6 +137,7 @@ bool config_manager_char_available(void) {
 #define CONFIG_VERSION  1
 
 // STM32F412Rx flash storage configuration (MXChip AZ3166)
+<<<<<<< HEAD
 // Use the LAST sector (sector 11) to avoid conflicts with WiFi firmware
 // WiFi firmware is typically in sectors 4-10, so sector 11 is safest
 #define CONFIG_FLASH_ADDRESS    0x0807F800  // Last 2KB of sector 11 (128KB sector)
@@ -147,6 +164,18 @@ static config_result_t eeprom_erase_config(void);
 static HAL_StatusTypeDef eeprom_write_data(uint32_t address, uint8_t* data, uint32_t size);
 static HAL_StatusTypeDef eeprom_read_data(uint32_t address, uint8_t* data, uint32_t size);
 #endif
+=======
+// Use the last sector of flash to avoid conflicts with firmware
+#define CONFIG_FLASH_ADDRESS    0x0800BC00  // Sector 4 start address
+#define CONFIG_FLASH_SECTOR     4           // Flash sector 4
+#define CONFIG_FLASH_SIZE       16384       // 16KB sector
+
+// STM32F412Rx backup SRAM storage configuration (MXChip AZ3166)  
+// Use backup SRAM instead of flash to avoid interference with WiFi
+// Backup SRAM: 0x40024000 - 0x40024FFF (4KB) - much safer than flash
+#define CONFIG_BACKUP_SRAM_ADDRESS    0x40024000  // Backup SRAM base
+#define CONFIG_BACKUP_SRAM_SIZE       4096
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 
 #if !FLASH_OPERATIONS_DISABLED || USE_DELAYED_FLASH_WRITE
 // CRC32 calculation for data integrity
@@ -266,6 +295,7 @@ config_result_t config_manager_load(device_config_t* config) {
     return CONFIG_OK;
     
 #elif FLASH_OPERATIONS_DISABLED
+<<<<<<< HEAD
 #if USE_EEPROM_EMULATION
     printf("Using EEPROM emulation for configuration storage\r\n");
     
@@ -288,6 +318,8 @@ config_result_t config_manager_load(device_config_t* config) {
         }
     }
 #else
+=======
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
     printf("Flash operations disabled - using RAM-only storage\r\n");
     if (g_ram_config_valid) {
         printf("Loading configuration from RAM storage\r\n");
@@ -297,7 +329,10 @@ config_result_t config_manager_load(device_config_t* config) {
         printf("No valid configuration found in RAM - using defaults\r\n");
         return CONFIG_ERROR_NOT_FOUND;
     }
+<<<<<<< HEAD
 #endif
+=======
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 #else
     printf("Loading configuration from flash...\r\n");
     
@@ -346,6 +381,7 @@ config_result_t config_manager_save(const device_config_t* config) {
     printf("Configuration saved to RAM - will write to flash after WiFi connects\r\n");
     return CONFIG_OK;
 #elif FLASH_OPERATIONS_DISABLED
+<<<<<<< HEAD
 #if USE_EEPROM_EMULATION
     printf("Saving configuration to EEPROM emulation...\r\n");
     
@@ -362,14 +398,22 @@ config_result_t config_manager_save(const device_config_t* config) {
     printf("Configuration saved successfully!\r\n");
     return CONFIG_OK;
 #else
+=======
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
     printf("Flash operations disabled - saving configuration to RAM storage\r\n");
     memcpy(&g_ram_config, config, sizeof(device_config_t));
     g_ram_config_valid = true;
     printf("Configuration saved successfully to RAM!\r\n");
+<<<<<<< HEAD
 #endif
     return CONFIG_OK;  // Success
 #else
     printf("Saving configuration to flash at 0x0807F800...\r\n");
+=======
+    return CONFIG_OK;  // Success
+#else
+    printf("Saving configuration to flash at 0x0800BC00...\r\n");
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
     
     // Create a copy with proper magic, version, and CRC
     device_config_t config_copy = *config;
@@ -554,6 +598,7 @@ bool config_manager_check_reset_button(void) {
 }
 
 config_result_t config_manager_factory_reset(void) {
+<<<<<<< HEAD
 #if USE_EEPROM_EMULATION
     printf("Performing factory reset - clearing EEPROM and RAM...\r\n");
     
@@ -576,6 +621,11 @@ config_result_t config_manager_factory_reset(void) {
     g_ram_config_valid = false;
     return CONFIG_OK;
 #endif
+=======
+    // Safe implementation: do nothing
+    printf("Factory reset disabled for safety - no flash operations performed\r\n");
+    return CONFIG_OK;
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 }
 
 bool config_manager_validate(const device_config_t* config) {
@@ -589,6 +639,16 @@ bool config_manager_validate(const device_config_t* config) {
     return true;
 }
 
+<<<<<<< HEAD
+=======
+#if FLASH_OPERATIONS_DISABLED
+#define HAL_FLASH_Unlock()      (HAL_OK)
+#define HAL_FLASH_Lock()        (HAL_OK)
+#define HAL_FLASH_Program(...)  (HAL_OK)
+#define HAL_FLASHEx_Erase(...) (HAL_OK)
+#endif
+
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 void config_manager_get_defaults(device_config_t* config) {
     if (!config) {
         return;
@@ -600,24 +660,39 @@ void config_manager_get_defaults(device_config_t* config) {
     // Set magic and version
     config->magic = CONFIG_MAGIC;
     config->version = CONFIG_VERSION;
+<<<<<<< HEAD
     
     // First apply built-in fallback defaults
+=======
+      // WiFi Configuration defaults
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
     strncpy(config->wifi_ssid, WIFI_SSID_DEFAULT, CONFIG_SSID_MAX_LEN - 1);
     strncpy(config->wifi_password, WIFI_PASSWORD_DEFAULT, CONFIG_PASSWORD_MAX_LEN - 1);
     config->wifi_mode = WIFI_MODE_DEFAULT;
     
+<<<<<<< HEAD
+=======
+    // MQTT Configuration defaults
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
     strncpy(config->mqtt_hostname, MQTT_BROKER_HOSTNAME_DEFAULT, CONFIG_HOSTNAME_MAX_LEN - 1);
     config->mqtt_port = MQTT_BROKER_PORT_DEFAULT;
     strncpy(config->mqtt_client_id, MQTT_CLIENT_ID_DEFAULT, CONFIG_CLIENT_ID_MAX_LEN - 1);
     strncpy(config->mqtt_username, MQTT_USERNAME_DEFAULT, CONFIG_USERNAME_MAX_LEN - 1);
     strncpy(config->mqtt_password, MQTT_PASSWORD_DEFAULT, CONFIG_PASSWORD_MAX_LEN - 1);
     
+<<<<<<< HEAD
     config->telemetry_interval = DEFAULT_TELEMETRY_INTERVAL;
     
     // Then load and apply configuration file defaults (overrides built-in defaults)
     load_config_file_defaults(config);
     
     printf("Configuration defaults loaded (built-in + device.conf)\r\n");
+=======
+    // Telemetry Configuration defaults
+    config->telemetry_interval = DEFAULT_TELEMETRY_INTERVAL;
+    
+    printf("Default configuration applied\r\n");
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
 }
 
 // Read a string from serial console
@@ -795,6 +870,7 @@ config_result_t config_manager_prompt_and_store(device_config_t* config) {
         return result;
     }
 }
+<<<<<<< HEAD
 
 #if USE_EEPROM_EMULATION
 // Simple EEPROM emulation using HAL flash functions
@@ -1061,3 +1137,5 @@ static void load_config_file_defaults(device_config_t* config) {
     printf("Loading configuration from embedded device.conf...\r\n");
     parse_config_file(config, embedded_device_conf);
 }
+=======
+>>>>>>> e01ae56d4244fe5c27dd66bf92faac0b0214d777
